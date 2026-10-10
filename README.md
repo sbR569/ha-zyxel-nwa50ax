@@ -1,18 +1,21 @@
-# Zyxel NWA50AX Home Assistant Integration
+# Zyxel NWA Home Assistant Integration (NWA50AX, NWA130BE)
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
-![Version](https://img.shields.io/badge/version-2.3.1-blue.svg)
+![Version](https://img.shields.io/badge/version-2.4.0-blue.svg)
 
-Home Assistant custom integration for a **Zyxel NWA50AX** WiFi access point (standalone mode) over SSH.
+Home Assistant custom integration for **Zyxel NWA50AX** and **NWA130BE** WiFi access points (standalone mode) over SSH.
+
+> Fork of [Olympiquee/ha-zyxel-nwa50ax](https://github.com/Olympiquee/ha-zyxel-nwa50ax) v2.3.1, extended for the tri-band Wi-Fi 7 **NWA130BE**: configurable SSH port, 6GHz radio (slot3), 6GHz client count, per-client MLO flag and every Ethernet port. On a dual-band NWA50AX nothing changes: no 6GHz entities are created and existing entity IDs are kept.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
 ## Supported firmware
 
-| Firmware | Status |
-|---|---|
-| 7.10(ABYW.3) | Validated (manufacturer CLI reference + real captures) |
-| 7.12(ABYW.0) | Validated (real CLI captures, see `tests/fixtures/v712/`) |
+| Model | Firmware | Status |
+|---|---|---|
+| NWA50AX | 7.10(ABYW.3) | Validated (manufacturer CLI reference + real captures) |
+| NWA50AX | 7.12(ABYW.0) | Validated (real CLI captures, see `tests/fixtures/v712/`) |
+| NWA130BE | 7.40(ACIL.1) | Validated (real CLI captures, anonymized, see `tests/fixtures/nwa130be_v740/`) |
 
 No breaking CLI format change was found between these two firmware lines for the commands this integration uses. Real captures are kept as regression-test fixtures so a future firmware update can be checked the same way, without needing physical access to the AP for every code change.
 
@@ -21,16 +24,16 @@ No breaking CLI format change was found between these two firmware lines for the
 ### Sensors
 - System: Uptime, Firmware/model, Last Seen (reactive to all 3 refresh groups)
 - Performance: CPU (current + 1/5 min avg, any number of cores), Memory usage
-- WiFi clients: total / 2.4GHz / 5GHz counts, with a detailed attribute list (MAC, IP, hostname, SSID, band, RSSI)
-- Ethernet port: status, TX/RX rate, TX/RX total bytes
-- Radio: 2.4GHz / 5GHz status with active SSIDs
+- WiFi clients: total / 2.4GHz / 5GHz (/ 6GHz on tri-band APs) counts, with a detailed attribute list (MAC, IP, hostname, SSID, band, RSSI, MLO)
+- Ethernet port: status, TX/RX rate, TX/RX total bytes (first port); every port's status in the `ports` attribute of Port Status
+- Radio: 2.4GHz / 5GHz (/ 6GHz on tri-band APs) status with active SSIDs
 
 Numeric/boolean sensors report `unknown` (not `0` / `False`) when a value could not be parsed, so a parsing failure is never silently confused with a real zero reading.
 
 ### Switches
 - Guest SSID (always-on vs. follows its configured schedule)
 - One schedule switch per additional SSID, auto-detected from the AP (Home/IoT/etc. - whatever you actually have configured)
-- Radio 2.4GHz / 5GHz on-off
+- Radio 2.4GHz / 5GHz (/ 6GHz on tri-band APs) on-off
 
 ### Device tracker
 - One entity per WiFi client ever seen, created dynamically as they connect
@@ -47,7 +50,7 @@ Available from the integration's device page ("Download diagnostics"). Contains 
 
 ## Requirements
 
-- Zyxel NWA50AX access point (standalone mode)
+- Zyxel NWA50AX or NWA130BE access point (standalone mode)
 - SSH access enabled on the AP
 - Home Assistant 2024.1.0 or newer (some options-flow features require a reasonably recent Core version - see Troubleshooting if the options page fails to open)
 - Python package: `paramiko>=2.12.0`
@@ -56,7 +59,7 @@ Available from the integration's device page ("Download diagnostics"). Contains 
 
 ### HACS (recommended)
 1. HACS → Integrations → ⋮ → Custom repositories
-2. Add `https://github.com/Olympiquee/ha-zyxel-nwa50ax` as an Integration
+2. Add `https://github.com/sbR569/ha-zyxel-nwa50ax` as an Integration
 3. Install, then restart Home Assistant
 
 ### Manual
@@ -68,6 +71,7 @@ Available from the integration's device page ("Download diagnostics"). Contains 
 
 You'll be asked for:
 - **Host**: AP IP address (e.g. `10.0.20.2`)
+- **SSH port**: default `22`; change it if SSH on the AP listens elsewhere
 - **Username** / **Password**: SSH admin credentials
 
 The very first successful connection also memorizes the AP's SSH host key fingerprint (see Security below) - nothing to do manually, it happens automatically.
@@ -105,7 +109,7 @@ This screen shows both currently-memorized fingerprints and lets you reset eithe
 
 ## Reconfigure / Re-authenticate
 
-- **Reconfigure** (from the integration's menu): update host/username/password without removing and re-adding the integration.
+- **Reconfigure** (from the integration's menu): update host/port/username/password without removing and re-adding the integration.
 - **Reauthenticate**: triggered automatically if the AP rejects the stored credentials (wrong/changed password), prompting for a new password without losing any other configuration.
 
 ## SSH commands used
@@ -126,7 +130,7 @@ show wlan-ssid-profile <name>      # one per detected SSID
 Actions (radio/SSID toggle send their config command and read back the verification state in the same session; radio *activation* specifically uses separate sessions - see code comments for why):
 ```
 configure terminal
-wlan slot1|slot2
+wlan slot1|slot2|slot3
 [no ]activate
 exit
 exit
@@ -140,13 +144,13 @@ write        # Guest only, to match its historical persistent behavior
 
 ## Testing
 
-`tests/fixtures/` contains real CLI output captured from a physical NWA50AX, used as regression fixtures so a firmware update or a future code change can be checked against known-good output without needing the physical device. See `tests/README.md`.
+`tests/fixtures/` contains real CLI output captured from a physical NWA50AX and NWA130BE, used as regression fixtures so a firmware update or a future code change can be checked against known-good output without needing the physical device. See `tests/README.md`.
 
 ## Troubleshooting
 
 **Options page fails to open ("500 Internal Server Error")**: usually means Home Assistant Core hasn't picked up the latest integration code - do a full HA restart (not just "reload"), not just replacing the files.
 
-**Integration won't connect**: verify SSH is enabled on the AP, test manually with `ssh admin@<ap_ip>`, then check logs:
+**Integration won't connect**: verify SSH is enabled on the AP, test manually with `ssh -p <port> admin@<ap_ip>`, then check logs:
 ```yaml
 logger:
   logs:

@@ -1,9 +1,11 @@
-"""API client for Zyxel NWA50AX via SSH.
+"""API client for Zyxel NWA access points (NWA50AX, NWA130BE) via SSH.
 
 Firmware validé (voir tests/fixtures/) :
-- 7.10(ABYW.3) - via la documentation constructeur et le CLI Reference Guide
-- 7.12(ABYW.0) - via des captures CLI réelles, aucune rupture de format
+- NWA50AX 7.10(ABYW.3) - via la documentation constructeur et le CLI Reference Guide
+- NWA50AX 7.12(ABYW.0) - via des captures CLI réelles, aucune rupture de format
   détectée sur les commandes utilisées par cette intégration.
+- NWA130BE 7.40(ACIL.1) - via des captures CLI réelles : même CLI, mais 3 slots
+  radio (2.4G/5G/6G), un champ "MLO:" par client et 2 ports Ethernet.
 
 Architecture (v2) :
 - Toutes les lectures d'un même "groupe" (fast/slow/daily) sont regroupées dans
@@ -705,10 +707,7 @@ class ZyxelSSHAPI:
             if not output:
                 return
             data["radio"] = self._parse_wlan(output)
-            self._known_ssids = sorted(
-                {s for s in data["radio"].get("slot1_ssids", []) if s}
-                | {s for s in data["radio"].get("slot2_ssids", []) if s}
-            )
+            self._known_ssids = self._ssids_of_all_slots(data["radio"])
 
         def _apply_clients(data: dict, outputs: list[str]) -> None:
             output = outputs[0] if outputs else ""
@@ -920,6 +919,11 @@ class ZyxelSSHAPI:
             if time_match:
                 client["connected_since"] = time_match.group(1).strip()
 
+            # Wi-Fi 7 Multi-Link Operation. None (pas False) quand le firmware
+            # ne fournit pas ce champ (NWA50AX).
+            mlo_match = re.search(r'MLO:\s*(\w+)', block)
+            client["mlo"] = (mlo_match.group(1).lower() == "yes") if mlo_match else None
+
             if client.get("mac"):
                 try:
                     hostname = self._hostname_resolver(client.get("mac"), client.get("ip"))
@@ -956,51 +960,56 @@ class ZyxelSSHAPI:
         return network
 
     def _parse_wlan(self, output: str) -> dict[str, Any]:
-        """Parse 'show wlan all' output.
+        """Parse 'show wlan all' output, pour autant de slots radio que l'AP en a.
 
-        `slot1_active`/`slot2_active` sont None si le format n'a pas pu être
-        reconnu - PAS False, qui laisserait croire à tort que la radio a été
-        interrogée avec succès et trouvée désactivée."""
-        radio: dict[str, Any] = {
-            "slot1_active": None,
-            "slot1_band": "Unknown",
-            "slot1_ssids": [],
-            "slot2_active": None,
-            "slot2_band": "Unknown",
-            "slot2_ssids": [],
-        }
+        Pour chaque slot N trouvé : `slotN_active`, `slotN_band`, `slotN_ssids`,
+        et `slots` liste les numéros trouvés (NWA50AX : [1, 2], NWA130BE
+        tri-bande : [1, 2, 3]). Les clés slot1/slot2 existent toujours, pour
+        les entités historiques.
 
-        slot1_match = re.search(
-            r'(?i)slot:\s*slot1.*?Activate:\s*(\w+).*?Band:\s*([\dG.]+)', output, re.DOTALL
-        )
-        if slot1_match:
-            radio["slot1_active"] = slot1_match.group(1).lower() == "yes"
-            radio["slot1_band"] = slot1_match.group(2)
+        `slotN_active` est None si le format n'a pas pu être reconnu - PAS
+        False, qui laisserait croire à tort que la radio a été interrogée avec
+        succès et trouvée désactivée."""
+        radio: dict[str, Any] = {"slots": []}
+        for slot in (1, 2):
+            radio[f"slot{slot}_active"] = None
+            radio[f"slot{slot}_band"] = "Unknown"
+            radio[f"slot{slot}_ssids"] = []
 
-        slot1_block = re.search(r'slot:\s*slot1(.*?)(?:slot:\s*slot2|$)', output, re.DOTALL | re.IGNORECASE)
-        if slot1_block:
+        # Découpage en blocs "slot: slotN" : chaque bloc s'arrête au slot
+        # suivant. Avant, le bloc slot2 s'étendait jusqu'à la fin de la sortie
+        # et récupérait aussi les SSIDs d'un éventuel slot3.
+        parts = re.split(r'(?i)slot:\s*slot(\d+)', output)
+        for number, block in zip(parts[1::2], parts[2::2]):
+            slot = int(number)
+            radio["slots"].append(slot)
+
+            active_match = re.search(r'(?i)Activate:\s*(\w+)', block)
+            radio[f"slot{slot}_active"] = (
+                active_match.group(1).lower() == "yes" if active_match else None
+            )
+
+            # \b : ne pas prendre les lignes "SSID_profile_N_band:".
+            band_match = re.search(r'(?i)\bBand:\s*([\dG.]+)', block)
+            radio[f"slot{slot}_band"] = band_match.group(1) if band_match else "Unknown"
+
             # [ \t]* (pas \s*) : \s inclut le saut de ligne, ce qui faisait
             # "déborder" la capture sur le libellé du CHAMP SUIVANT quand un
             # profil SSID est vide (ex: "SSID_profile_5:\n SSID_profile_6:"
             # capturait à tort "SSID_profile_6:" comme valeur du profil 5).
             # Bug latent trouvé via les fixtures 7.12 (4 SSIDs + profils vides
             # en fin de liste, jamais exercé par les données de test précédentes).
-            ssids = re.findall(r'SSID_profile_\d+:[ \t]*(\S+)', slot1_block.group(1))
-            radio["slot1_ssids"] = [s for s in ssids if s]
-
-        slot2_match = re.search(
-            r'(?i)slot:\s*slot2.*?Activate:\s*(\w+).*?Band:\s*([\dG.]+)', output, re.DOTALL
-        )
-        if slot2_match:
-            radio["slot2_active"] = slot2_match.group(1).lower() == "yes"
-            radio["slot2_band"] = slot2_match.group(2)
-
-        slot2_block = re.search(r'slot:\s*slot2(.*?)$', output, re.DOTALL | re.IGNORECASE)
-        if slot2_block:
-            ssids = re.findall(r'SSID_profile_\d+:[ \t]*(\S+)', slot2_block.group(1))
-            radio["slot2_ssids"] = [s for s in ssids if s]
+            ssids = re.findall(r'SSID_profile_\d+:[ \t]*(\S+)', block)
+            radio[f"slot{slot}_ssids"] = [s for s in ssids if s]
 
         return radio
+
+    @staticmethod
+    def _ssids_of_all_slots(radio: dict[str, Any]) -> list[str]:
+        """SSIDs configurés sur au moins un slot radio, triés et sans doublon."""
+        return sorted(
+            {s for slot in radio.get("slots", []) for s in radio.get(f"slot{slot}_ssids", []) if s}
+        )
 
     def _parse_radio_slot_active(self, output: str, slot: int) -> Optional[bool]:
         """Extrait uniquement l'état Activate: yes/no d'un slot depuis 'show wlan all'."""
@@ -1017,6 +1026,8 @@ class ZyxelSSHAPI:
     def _parse_port_status(self, output: str) -> dict[str, Any]:
         """Parse 'show port status' output.
 
+        Les clés de premier niveau décrivent le premier port (entités
+        historiques) ; `ports` liste chaque port trouvé (le NWA130BE en a 2).
         Les champs numériques (tx_rate/rx_rate/tx_bytes/rx_bytes) sont None si
         le format n'a pas pu être reconnu, jamais 0."""
         port: dict[str, Any] = {
@@ -1027,23 +1038,28 @@ class ZyxelSSHAPI:
             "tx_rate": None,
             "rx_rate": None,
             "uptime": None,
+            "ports": [],
         }
 
-        port_match = re.search(
-            r'1\s+(\S+)\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+(\d+)\s+(\d+)\s+([\d:]+)\s+\d+\s+(\d+)\s+(\d+)',
-            output
-        )
+        for port_match in re.finditer(
+            r'(?m)^\s*(\d+)\s+(\S+)\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+(\d+)\s+(\d+)\s+([\d:]+)\s+\d+\s+(\d+)\s+(\d+)',
+            output,
+        ):
+            status = port_match.group(2)
+            port["ports"].append({
+                "port": int(port_match.group(1)),
+                "status": status,
+                "speed": status.split("/")[0] if "/" in status else None,
+                "tx_rate": int(port_match.group(3)),
+                "rx_rate": int(port_match.group(4)),
+                "uptime": port_match.group(5),
+                "tx_bytes": int(port_match.group(6)),
+                "rx_bytes": int(port_match.group(7)),
+            })
 
-        if port_match:
-            port["status"] = port_match.group(1)
-            port["tx_rate"] = int(port_match.group(2))
-            port["rx_rate"] = int(port_match.group(3))
-            port["uptime"] = port_match.group(4)
-            port["tx_bytes"] = int(port_match.group(5))
-            port["rx_bytes"] = int(port_match.group(6))
-
-            if "/" in port["status"]:
-                port["speed"] = port["status"].split("/")[0]
+        if port["ports"]:
+            first = port["ports"][0]
+            port.update({key: value for key, value in first.items() if key != "port"})
 
         return port
 
@@ -1226,11 +1242,7 @@ class ZyxelSSHAPI:
                 lambda: self._async_execute_session_direct(["show wlan all"], settle_delays=[CLI_SETTLE_SLOW_READ]),
             )
             if outputs and outputs[0]:
-                radio = self._parse_wlan(outputs[0])
-                self._known_ssids = sorted(
-                    {s for s in radio.get("slot1_ssids", []) if s}
-                    | {s for s in radio.get("slot2_ssids", []) if s}
-                )
+                self._known_ssids = self._ssids_of_all_slots(self._parse_wlan(outputs[0]))
         except Exception as err:
             _LOGGER.error("Error getting SSID list: %s", err)
 

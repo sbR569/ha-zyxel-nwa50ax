@@ -3,9 +3,10 @@
     "step": {
       "user": {
         "title": "Configure Zyxel Device",
-        "description": "Configure your Zyxel NWA50AX access point",
+        "description": "Configure your Zyxel NWA access point (NWA50AX, NWA130BE)",
         "data": {
           "host": "IP Address or Hostname",
+          "port": "SSH port",
           "username": "Username",
           "password": "Password"
         }
@@ -15,6 +16,7 @@
         "description": "Update the connection details without removing and re-adding the integration.",
         "data": {
           "host": "IP Address or Hostname",
+          "port": "SSH port",
           "username": "Username",
           "password": "Password"
         }
@@ -41,7 +43,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "Zyxel NWA50AX Options",
+        "title": "Zyxel NWA Options",
         "menu_options": {
           "intervals": "Refresh intervals",
           "data_groups": "Data assignment (fast/slow/daily)",

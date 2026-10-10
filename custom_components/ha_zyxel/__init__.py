@@ -22,6 +22,7 @@ from .const import (
     CONF_MIKROTIK_SSH_FINGERPRINT,
     CONF_MIKROTIK_USERNAME,
     CONF_PASSWORD,
+    CONF_PORT,
     CONF_SLOW_INTERVAL,
     CONF_SSH_FINGERPRINT,
     CONF_USERNAME,
@@ -31,6 +32,7 @@ from .const import (
     DEFAULT_FAST_INTERVAL,
     DEFAULT_ITEM_GROUPS,
     DEFAULT_MIKROTIK_REFRESH_INTERVAL,
+    DEFAULT_PORT,
     DEFAULT_SLOW_INTERVAL,
     DOMAIN,
     PRESENCE_GRACE_MIN_SECONDS,
@@ -59,6 +61,8 @@ def _persist_option(hass: HomeAssistant, entry: ConfigEntry, key: str, value) ->
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Zyxel from a config entry."""
     host = entry.data[CONF_HOST]
+    # Les entries créées avant l'ajout du champ port n'en ont pas : port SSH standard.
+    port = entry.data.get(CONF_PORT, DEFAULT_PORT)
     username = entry.data[CONF_USERNAME]
     password = entry.data[CONF_PASSWORD]
 
@@ -75,7 +79,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         for item in DATA_ITEMS
     }
 
-    api = ZyxelSSHAPI(host, username, password)
+    api = ZyxelSSHAPI(host, username, password, port=port)
     api.set_item_groups(item_groups)
 
     # Empreinte SSH mémorisée (TOFU - voir ssh_security.py). Persistée dans

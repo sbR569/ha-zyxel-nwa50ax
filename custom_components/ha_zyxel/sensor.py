@@ -23,6 +23,7 @@ from .const import (
     DATA_ITEM_RADIO,
     DATA_ITEM_UPTIME,
     DOMAIN,
+    RADIO_SLOTS,
 )
 from .entity_helpers import build_device_info, get_shared_state
 
@@ -66,9 +67,16 @@ async def async_setup_entry(
         ZyxelPortRxBytesSensor(by_item[DATA_ITEM_PORT], config_entry),
 
         # Radio
-        ZyxelSlot1StatusSensor(by_item[DATA_ITEM_RADIO], config_entry),
-        ZyxelSlot2StatusSensor(by_item[DATA_ITEM_RADIO], config_entry),
+        ZyxelRadioStatusSensor(by_item[DATA_ITEM_RADIO], config_entry, slot=1),
+        ZyxelRadioStatusSensor(by_item[DATA_ITEM_RADIO], config_entry, slot=2),
     ]
+
+    # Radio 6GHz (slot3) uniquement sur les AP tri-bande (NWA130BE) : le
+    # premier refresh de l'item "radio" a déjà eu lieu dans __init__.py.
+    radio_data = (by_item[DATA_ITEM_RADIO].data or {}).get("radio", {})
+    if 3 in radio_data.get("slots", []):
+        sensors.append(ZyxelClients6GHzSensor(by_item[DATA_ITEM_CLIENTS], config_entry))
+        sensors.append(ZyxelRadioStatusSensor(by_item[DATA_ITEM_RADIO], config_entry, slot=3))
 
     async_add_entities(sensors)
 
@@ -357,6 +365,7 @@ class ZyxelClientsSensor(ZyxelBaseSensor):
 
         band_24ghz = sum(1 for c in clients if "2.4" in c.get("band", ""))
         band_5ghz = sum(1 for c in clients if "5" in c.get("band", ""))
+        band_6ghz = sum(1 for c in clients if "6" in c.get("band", ""))
 
         client_list = []
         for client in clients:
@@ -366,6 +375,7 @@ class ZyxelClientsSensor(ZyxelBaseSensor):
                 "ssid": client.get("ssid", "Unknown"),
                 "band": client.get("band", "Unknown"),
                 "rssi_dbm": client.get("rssi_dbm", 0),
+                "mlo": client.get("mlo"),
             }
             if client.get("hostname"):
                 client_info["hostname"] = client.get("hostname")
@@ -375,6 +385,7 @@ class ZyxelClientsSensor(ZyxelBaseSensor):
         return {
             "clients_2_4ghz": band_24ghz,
             "clients_5ghz": band_5ghz,
+            "clients_6ghz": band_6ghz,
             "ssid_counts": ssid_counts,
             "client_list": client_list,
         }
@@ -414,6 +425,23 @@ class ZyxelClients5GHzSensor(ZyxelBaseSensor):
         return sum(1 for c in clients if "5" in c.get("band", ""))
 
 
+class ZyxelClients6GHzSensor(ZyxelBaseSensor):
+    """Sensor for 6GHz clients (AP tri-bande uniquement)."""
+
+    _attr_name = "Clients (6GHz)"
+    _attr_icon = "mdi:wifi"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._config_entry.entry_id}_clients_6ghz"
+
+    @property
+    def native_value(self) -> int:
+        clients = self.coordinator.data.get("clients", [])
+        return sum(1 for c in clients if "6" in c.get("band", ""))
+
+
 # ============================================================================
 # CAPTEURS PORT ETHERNET
 # ============================================================================
@@ -441,6 +469,10 @@ class ZyxelPortStatusSensor(ZyxelBaseSensor):
         return {
             "speed": port.get("speed"),
             "uptime": port.get("uptime"),
+            "ports": [
+                {"port": p["port"], "status": p["status"], "speed": p["speed"]}
+                for p in port.get("ports", [])
+            ],
         }
 
 
@@ -530,19 +562,28 @@ class ZyxelPortRxBytesSensor(ZyxelBaseSensor):
 # CAPTEURS RADIO
 # ============================================================================
 
-class ZyxelSlot1StatusSensor(ZyxelBaseSensor):
-    """Sensor for Slot 1 (2.4GHz) status."""
+class ZyxelRadioStatusSensor(ZyxelBaseSensor):
+    """État d'un slot radio (1 = 2.4GHz, 2 = 5GHz, 3 = 6GHz).
 
-    _attr_name = "Radio 2.4GHz Status"
+    unique_id `<entry>_slotN_status`, identique aux anciennes classes
+    ZyxelSlot1StatusSensor/ZyxelSlot2StatusSensor qu'elle remplace.
+    """
+
     _attr_icon = "mdi:radio-tower"
+
+    def __init__(self, coordinator, config_entry: ConfigEntry, slot: int) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator, config_entry)
+        self._slot = slot
+        self._attr_name = f"Radio {RADIO_SLOTS[slot][0]} Status"
 
     @property
     def unique_id(self) -> str:
-        return f"{self._config_entry.entry_id}_slot1_status"
+        return f"{self._config_entry.entry_id}_slot{self._slot}_status"
 
     @property
     def native_value(self) -> str | None:
-        active = self.coordinator.data.get("radio", {}).get("slot1_active")
+        active = self.coordinator.data.get("radio", {}).get(f"slot{self._slot}_active")
         if active is None:
             return None
         return "Active" if active else "Inactive"
@@ -551,32 +592,6 @@ class ZyxelSlot1StatusSensor(ZyxelBaseSensor):
     def extra_state_attributes(self) -> dict[str, Any]:
         radio = self.coordinator.data.get("radio", {})
         return {
-            "band": radio.get("slot1_band", "Unknown"),
-            "ssids": ", ".join(radio.get("slot1_ssids", [])),
-        }
-
-
-class ZyxelSlot2StatusSensor(ZyxelBaseSensor):
-    """Sensor for Slot 2 (5GHz) status."""
-
-    _attr_name = "Radio 5GHz Status"
-    _attr_icon = "mdi:radio-tower"
-
-    @property
-    def unique_id(self) -> str:
-        return f"{self._config_entry.entry_id}_slot2_status"
-
-    @property
-    def native_value(self) -> str | None:
-        active = self.coordinator.data.get("radio", {}).get("slot2_active")
-        if active is None:
-            return None
-        return "Active" if active else "Inactive"
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        radio = self.coordinator.data.get("radio", {})
-        return {
-            "band": radio.get("slot2_band", "Unknown"),
-            "ssids": ", ".join(radio.get("slot2_ssids", [])),
+            "band": radio.get(f"slot{self._slot}_band", "Unknown"),
+            "ssids": ", ".join(radio.get(f"slot{self._slot}_ssids", [])),
         }

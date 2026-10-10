@@ -4,6 +4,7 @@ DOMAIN = "ha_zyxel"
 
 # Configuration - Connexion AP Zyxel
 CONF_HOST = "host"
+CONF_PORT = "port"
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
 
@@ -37,7 +38,16 @@ CONF_RESET_MIKROTIK_SSH_FINGERPRINT = "reset_mikrotik_ssh_fingerprint"
 
 # Defaults - Connexion
 DEFAULT_HOST = "192.168.1.2"
+DEFAULT_PORT = 22
 DEFAULT_USERNAME = "admin"
+
+# Radios connues par numéro de slot : libellé de bande et suffixe d'unique_id
+# du switch radio (suffixes 24g/5g repris tels quels des entités historiques).
+RADIO_SLOTS: dict[int, tuple[str, str]] = {
+    1: ("2.4GHz", "24g"),
+    2: ("5GHz", "5g"),
+    3: ("6GHz", "6g"),
+}
 
 # Defaults - Groupes de rafraîchissement
 DEFAULT_FAST_INTERVAL = 120        # 2 minutes - radios + clients connectés

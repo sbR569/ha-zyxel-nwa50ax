@@ -1,0 +1,4 @@
+Zyxel Communications Corp.
+model           : NWA130BE
+firmware version: V7.40(ACIL.1)
+build date      : 2026-07-23 05:48:49

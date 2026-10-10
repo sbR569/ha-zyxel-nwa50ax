@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 
-from .const import DATA_ITEM_RADIO, DATA_ITEM_SSID_SCHEDULES, DOMAIN
+from .const import DATA_ITEM_RADIO, DATA_ITEM_SSID_SCHEDULES, DOMAIN, RADIO_SLOTS
 from .entity_helpers import build_device_info
 from .zyxel_ssh_api import ZyxelSSHAPI
 
@@ -166,24 +166,32 @@ class ZyxelGuestSSIDSwitch(CoordinatorEntity, SwitchEntity):
         }
 
 
-class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
-    """Switch to enable/disable 2.4GHz radio."""
+class ZyxelRadioSwitch(CoordinatorEntity, SwitchEntity):
+    """Switch to enable/disable one radio slot (1 = 2.4GHz, 2 = 5GHz, 3 = 6GHz).
 
-    _attr_name = "Radio 2.4GHz"
+    Remplace ZyxelRadio24GSwitch/ZyxelRadio5GSwitch ; unique_id
+    `<entry>_radio_<suffixe>` inchangé pour les slots 1 et 2 (24g/5g).
+    """
+
     _attr_icon = "mdi:radio-tower"
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator, api, config_entry: ConfigEntry, radio_lock: asyncio.Lock) -> None:
+    def __init__(
+        self, coordinator, api, config_entry: ConfigEntry, radio_lock: asyncio.Lock, slot: int
+    ) -> None:
         """Initialize the switch."""
         super().__init__(coordinator)
         self._api = api
         self._config_entry = config_entry
         self._lock = radio_lock
+        self._slot = slot
+        self._band, self._uid_suffix = RADIO_SLOTS[slot]
+        self._attr_name = f"Radio {self._band}"
 
     @property
     def unique_id(self) -> str:
         """Return unique ID."""
-        return f"{self._config_entry.entry_id}_radio_24g"
+        return f"{self._config_entry.entry_id}_radio_{self._uid_suffix}"
 
     @property
     def device_info(self) -> dict[str, Any]:
@@ -191,48 +199,48 @@ class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool | None:
-        """Return true if 2.4GHz radio is active. None si pas encore déterminé."""
+        """Return true if the radio is active. None si pas encore déterminé."""
         radio = self.coordinator.data.get("radio", {})
-        return radio.get("slot1_active")
+        return radio.get(f"slot{self._slot}_active")
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the 2.4GHz radio on."""
+        """Turn the radio on."""
         if self._lock.locked():
             _LOGGER.warning("A radio toggle is already in progress, please wait")
             return
 
-        _LOGGER.info("Activating 2.4GHz radio (this may take up to 3 minutes)")
+        _LOGGER.info("Activating %s radio (this may take up to 3 minutes)", self._band)
         async with self._lock:
             try:
-                success = await self._api.async_toggle_radio(slot=1, enable=True)
+                success = await self._api.async_toggle_radio(slot=self._slot, enable=True)
                 if success:
                     self._push_confirmed_state(True)
-                    _LOGGER.info("2.4GHz radio activated successfully")
+                    _LOGGER.info("%s radio activated successfully", self._band)
                 else:
-                    _LOGGER.error("Failed to activate 2.4GHz radio after all attempts")
+                    _LOGGER.error("Failed to activate %s radio after all attempts", self._band)
             except Exception as err:
-                _LOGGER.error("Error activating 2.4GHz radio: %s", err)
+                _LOGGER.error("Error activating %s radio: %s", self._band, err)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn the 2.4GHz radio off."""
+        """Turn the radio off."""
         if self._lock.locked():
             _LOGGER.warning("A radio toggle is already in progress, please wait")
             return
 
-        _LOGGER.info("Deactivating 2.4GHz radio")
+        _LOGGER.info("Deactivating %s radio", self._band)
         async with self._lock:
             try:
-                success = await self._api.async_toggle_radio(slot=1, enable=False)
+                success = await self._api.async_toggle_radio(slot=self._slot, enable=False)
                 if success:
                     self._push_confirmed_state(False)
-                    _LOGGER.info("2.4GHz radio deactivated successfully")
+                    _LOGGER.info("%s radio deactivated successfully", self._band)
                 else:
-                    _LOGGER.error("Failed to deactivate 2.4GHz radio after all attempts")
+                    _LOGGER.error("Failed to deactivate %s radio after all attempts", self._band)
             except Exception as err:
-                _LOGGER.error("Error deactivating 2.4GHz radio: %s", err)
+                _LOGGER.error("Error deactivating %s radio: %s", self._band, err)
 
     def _push_confirmed_state(self, state: bool) -> None:
-        self.coordinator.data.setdefault("radio", {})["slot1_active"] = state
+        self.coordinator.data.setdefault("radio", {})[f"slot{self._slot}_active"] = state
         self.coordinator.async_set_updated_data(self.coordinator.data)
 
     @property
@@ -240,90 +248,9 @@ class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
         """Return additional attributes."""
         radio = self.coordinator.data.get("radio", {})
         return {
-            "band": radio.get("slot1_band", "Unknown"),
-            "ssids": ", ".join(radio.get("slot1_ssids", [])),
-            "description": "Contrôle la radio WiFi 2.4GHz (slot1)",
-            "note": "Désactivation ~5-10s (session unique), Activation ~40-60s (redémarrage matériel)",
-        }
-
-
-class ZyxelRadio5GSwitch(CoordinatorEntity, SwitchEntity):
-    """Switch to enable/disable 5GHz radio."""
-
-    _attr_name = "Radio 5GHz"
-    _attr_icon = "mdi:radio-tower"
-    _attr_has_entity_name = True
-
-    def __init__(self, coordinator, api, config_entry: ConfigEntry, radio_lock: asyncio.Lock) -> None:
-        """Initialize the switch."""
-        super().__init__(coordinator)
-        self._api = api
-        self._config_entry = config_entry
-        self._lock = radio_lock
-
-    @property
-    def unique_id(self) -> str:
-        """Return unique ID."""
-        return f"{self._config_entry.entry_id}_radio_5g"
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        return build_device_info(self.hass, self._config_entry.entry_id)
-
-    @property
-    def is_on(self) -> bool | None:
-        """Return true if 5GHz radio is active. None si pas encore déterminé."""
-        radio = self.coordinator.data.get("radio", {})
-        return radio.get("slot2_active")
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the 5GHz radio on."""
-        if self._lock.locked():
-            _LOGGER.warning("A radio toggle is already in progress, please wait")
-            return
-
-        _LOGGER.info("Activating 5GHz radio (this may take up to 3 minutes)")
-        async with self._lock:
-            try:
-                success = await self._api.async_toggle_radio(slot=2, enable=True)
-                if success:
-                    self._push_confirmed_state(True)
-                    _LOGGER.info("5GHz radio activated successfully")
-                else:
-                    _LOGGER.error("Failed to activate 5GHz radio after all attempts")
-            except Exception as err:
-                _LOGGER.error("Error activating 5GHz radio: %s", err)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn the 5GHz radio off."""
-        if self._lock.locked():
-            _LOGGER.warning("A radio toggle is already in progress, please wait")
-            return
-
-        _LOGGER.info("Deactivating 5GHz radio")
-        async with self._lock:
-            try:
-                success = await self._api.async_toggle_radio(slot=2, enable=False)
-                if success:
-                    self._push_confirmed_state(False)
-                    _LOGGER.info("5GHz radio deactivated successfully")
-                else:
-                    _LOGGER.error("Failed to deactivate 5GHz radio after all attempts")
-            except Exception as err:
-                _LOGGER.error("Error deactivating 5GHz radio: %s", err)
-
-    def _push_confirmed_state(self, state: bool) -> None:
-        self.coordinator.data.setdefault("radio", {})["slot2_active"] = state
-        self.coordinator.async_set_updated_data(self.coordinator.data)
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return additional attributes."""
-        radio = self.coordinator.data.get("radio", {})
-        return {
-            "band": radio.get("slot2_band", "Unknown"),
-            "ssids": ", ".join(radio.get("slot2_ssids", [])),
-            "description": "Contrôle la radio WiFi 5GHz (slot2)",
+            "band": radio.get(f"slot{self._slot}_band", "Unknown"),
+            "ssids": ", ".join(radio.get(f"slot{self._slot}_ssids", [])),
+            "description": f"Contrôle la radio WiFi {self._band} (slot{self._slot})",
             "note": "Désactivation ~5-10s (session unique), Activation ~40-60s (redémarrage matériel)",
         }
 
@@ -341,11 +268,16 @@ async def async_setup_entry(
     api = entry_data["api"]
     radio_lock = entry_data["radio_lock"]
 
+    # Slots 1 et 2 toujours (comportement historique) ; slot3 (6GHz)
+    # uniquement si l'AP l'a remonté au premier refresh de l'item "radio".
+    radio_slots = (radio_coordinator.data or {}).get("radio", {}).get("slots", [])
     entities = [
         ZyxelGuestSSIDSwitch(ssid_coordinator, api, entry),
-        ZyxelRadio24GSwitch(radio_coordinator, api, entry, radio_lock),
-        ZyxelRadio5GSwitch(radio_coordinator, api, entry, radio_lock),
+        ZyxelRadioSwitch(radio_coordinator, api, entry, radio_lock, slot=1),
+        ZyxelRadioSwitch(radio_coordinator, api, entry, radio_lock, slot=2),
     ]
+    if 3 in radio_slots:
+        entities.append(ZyxelRadioSwitch(radio_coordinator, api, entry, radio_lock, slot=3))
 
     # Auto-détection des SSIDs (depuis le cache déjà alimenté par le premier
     # refresh de l'item "radio" effectué dans __init__.py avant l'appel à

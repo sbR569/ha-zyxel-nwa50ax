@@ -19,6 +19,7 @@ from .const import (
     CONF_MIKROTIK_SSH_FINGERPRINT,
     CONF_MIKROTIK_USERNAME,
     CONF_PASSWORD,
+    CONF_PORT,
     CONF_RESET_MIKROTIK_SSH_FINGERPRINT,
     CONF_RESET_SSH_FINGERPRINT,
     CONF_SLOW_INTERVAL,
@@ -31,6 +32,7 @@ from .const import (
     DEFAULT_HOST,
     DEFAULT_ITEM_GROUPS,
     DEFAULT_MIKROTIK_REFRESH_INTERVAL,
+    DEFAULT_PORT,
     DEFAULT_SLOW_INTERVAL,
     DEFAULT_USERNAME,
     DOMAIN,
@@ -46,9 +48,12 @@ from .zyxel_ssh_api import ZyxelAuthError, ZyxelSSHAPI
 
 _LOGGER = logging.getLogger(__name__)
 
+PORT_VALIDATOR = vol.All(vol.Coerce(int), vol.Range(min=1, max=65535))
+
 DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_HOST, default=DEFAULT_HOST): str,
+        vol.Required(CONF_PORT, default=DEFAULT_PORT): PORT_VALIDATOR,
         vol.Required(CONF_USERNAME, default=DEFAULT_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
     }
@@ -83,7 +88,7 @@ async def validate_input(hass: HomeAssistant, data: dict) -> dict:
     username = data[CONF_USERNAME]
     password = data[CONF_PASSWORD]
 
-    api = ZyxelSSHAPI(host, username, password)
+    api = ZyxelSSHAPI(host, username, password, port=data.get(CONF_PORT, DEFAULT_PORT))
 
     try:
         connected = await api.async_connect()
@@ -97,7 +102,7 @@ async def validate_input(hass: HomeAssistant, data: dict) -> dict:
         _LOGGER.error("Unable to connect to Zyxel device: %s", ex)
         raise CannotConnect from ex
 
-    return {"title": f"Zyxel NWA50AX ({host})"}
+    return {"title": f"Zyxel NWA ({host})"}
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -155,6 +160,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="reconfigure",
             data_schema=vol.Schema({
                 vol.Required(CONF_HOST, default=current.get(CONF_HOST, DEFAULT_HOST)): str,
+                vol.Required(CONF_PORT, default=current.get(CONF_PORT, DEFAULT_PORT)): PORT_VALIDATOR,
                 vol.Required(CONF_USERNAME, default=current.get(CONF_USERNAME, DEFAULT_USERNAME)): str,
                 vol.Required(CONF_PASSWORD): str,
             }),

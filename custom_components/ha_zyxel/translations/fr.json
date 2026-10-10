@@ -3,9 +3,10 @@
     "step": {
       "user": {
         "title": "Configuration du périphérique Zyxel",
-        "description": "Configurez votre point d'accès Zyxel NWA50AX",
+        "description": "Configurez votre point d'accès Zyxel NWA (NWA50AX, NWA130BE)",
         "data": {
           "host": "Adresse IP ou nom d'hôte",
+          "port": "Port SSH",
           "username": "Nom d'utilisateur",
           "password": "Mot de passe"
         }
@@ -15,6 +16,7 @@
         "description": "Modifie les informations de connexion sans supprimer et recréer l'intégration.",
         "data": {
           "host": "Adresse IP ou nom d'hôte",
+          "port": "Port SSH",
           "username": "Nom d'utilisateur",
           "password": "Mot de passe"
         }
@@ -41,7 +43,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "Options Zyxel NWA50AX",
+        "title": "Options Zyxel NWA",
         "menu_options": {
           "intervals": "Intervalles de rafraîchissement",
           "data_groups": "Répartition des données (rapide/lent/quotidien)",
